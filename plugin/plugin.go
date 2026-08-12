@@ -235,6 +235,13 @@ func (pm *PluginManager) GetPlugins() []AsyncSearchPlugin {
 	return pm.plugins
 }
 
+// SetPlugins 直接替换插件管理器持有的插件列表。
+// 用于测速筛选后，将参与实际搜索的插件收窄为延迟最低的若干个。
+// 传入的插件应为已经完成注册（含初始化）的插件实例，本方法不会重新执行初始化。
+func (pm *PluginManager) SetPlugins(plugins []AsyncSearchPlugin) {
+	pm.plugins = plugins
+}
+
 // ============================================================
 // 第四部分：工具函数
 // ============================================================
