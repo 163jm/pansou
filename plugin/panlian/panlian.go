@@ -507,7 +507,12 @@ func (p *PanlianPlugin) Initialize() error {
 
 	cachePath := os.Getenv("CACHE_PATH")
 	if cachePath == "" {
-		cachePath = "./cache"
+		// 默认使用二进制所在目录下的 cache 子目录，与 speedtest_result.json 保持同一目录
+		if exePath, err := os.Executable(); err == nil {
+			cachePath = filepath.Join(filepath.Dir(exePath), "cache")
+		} else {
+			cachePath = "./cache"
+		}
 	}
 	storageDir = filepath.Join(cachePath, "panlian_users")
 
