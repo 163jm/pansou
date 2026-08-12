@@ -23,6 +23,7 @@ import (
 	"pansou/service"
 	"pansou/util"
 	"pansou/util/cache"
+	"pansou/util/speedtest"
 
 	// 以下是插件的空导入，用于触发各插件的init函数，实现自动注册
 	// 添加新插件时，只需在此处添加对应的导入语句即可
@@ -182,6 +183,12 @@ func startServer() {
 		pluginManager.RegisterGlobalPluginsWithFilter(config.AppConfig.EnabledPlugins)
 	}
 
+	// 测速筛选：根据SPEEDTEST_ENABLED决定是否对频道/插件做测速，
+	// 并根据SPEEDTEST_TOP_N筛选出延迟最低的若干个用于实际搜索。
+	if config.AppConfig.SpeedTestEnabled {
+		runSpeedTestAndFilter(pluginManager)
+	}
+
 	// 更新默认并发数（如果插件被禁用则使用0）
 	pluginCount := 0
 	if config.AppConfig.AsyncPluginEnabled {
@@ -270,6 +277,71 @@ func startServer() {
 	}
 
 	fmt.Println("服务器已安全关闭")
+}
+
+// runSpeedTestAndFilter 对当前配置的TG频道和已注册插件执行测速（仅测未测过的，增量补测），
+// 并根据SPEEDTEST_TOP_N筛选出延迟最低的若干个，分别更新到：
+//   - config.AppConfig.DefaultChannels（供频道搜索使用）
+//   - pluginManager 持有的插件列表（供插件搜索使用）
+//
+// 测速结果会保存到 config.AppConfig.SpeedTestResultPath 指定的文件中，
+// 下次启动时会直接加载复用，只对新增的频道/插件补测。
+func runSpeedTestAndFilter(pluginManager *plugin.PluginManager) {
+	resultPath := config.AppConfig.SpeedTestResultPath
+	topN := config.AppConfig.SpeedTestTopN
+	timeout := config.AppConfig.SpeedTestTimeout
+
+	fmt.Printf("测速功能已启用 (结果文件: %s, TOP_N: %d, 超时: %v)\n", resultPath, topN, timeout)
+
+	channels := config.AppConfig.DefaultChannels
+	plugins := pluginManager.GetPlugins()
+
+	// 提前预估本次需要新测速（即结果文件中不存在）的数量，给出耗时提示
+	// 测速全程串行执行，每个目标最多测2次（连通性+延迟），最坏情况下单个目标耗时接近2倍超时时间
+	// 注：这里会额外读取一次结果文件，RunAndPersist内部还会再读一次，属于可忽略的小开销，
+	// 换取的是启动时能提前给出准确的预估提示。
+	existingReport := speedtest.LoadReport(resultPath)
+	newChannelCount := 0
+	for _, ch := range channels {
+		if _, exists := existingReport.Channels[ch]; !exists {
+			newChannelCount++
+		}
+	}
+	newPluginCount := 0
+	for _, p := range plugins {
+		if _, exists := existingReport.Plugins[p.Name()]; !exists {
+			newPluginCount++
+		}
+	}
+	if total := newChannelCount + newPluginCount; total > 0 {
+		worstCaseSeconds := float64(total) * timeout.Seconds() * 2
+		fmt.Printf("本次需新测速 %d 个目标（频道%d + 插件%d），测速为串行执行，最坏情况约需 %.0f 秒，请耐心等待...\n",
+			total, newChannelCount, newPluginCount, worstCaseSeconds)
+	} else {
+		fmt.Println("所有频道/插件均已测速过，直接使用已有结果")
+	}
+
+	report := speedtest.RunAndPersist(resultPath, channels, plugins, timeout)
+
+	// 筛选频道
+	selectedChannels := speedtest.SelectTopChannels(report, channels, topN)
+	config.AppConfig.DefaultChannels = selectedChannels
+	fmt.Printf("测速筛选后频道数: %d/%d\n", len(selectedChannels), len(channels))
+
+	// 筛选插件：先算出应保留的插件名集合，再按原有顺序过滤出对应的插件实例
+	selectedPluginNames := speedtest.SelectTopPluginNames(report, plugins, topN)
+	nameSet := make(map[string]bool, len(selectedPluginNames))
+	for _, name := range selectedPluginNames {
+		nameSet[name] = true
+	}
+	filteredPlugins := make([]plugin.AsyncSearchPlugin, 0, len(selectedPluginNames))
+	for _, p := range plugins {
+		if nameSet[p.Name()] {
+			filteredPlugins = append(filteredPlugins, p)
+		}
+	}
+	pluginManager.SetPlugins(filteredPlugins)
+	fmt.Printf("测速筛选后插件数: %d/%d\n", len(filteredPlugins), len(plugins))
 }
 
 // printServiceInfo 打印服务信息
@@ -366,6 +438,18 @@ func printServiceInfo(port string, pluginManager *plugin.PluginManager) {
 		config.AppConfig.HTTPWriteTimeout, writeTimeoutMsg,
 		config.AppConfig.HTTPIdleTimeout,
 		config.AppConfig.HTTPMaxConns, maxConnsMsg)
+
+	// 输出测速配置信息
+	if config.AppConfig.SpeedTestEnabled {
+		topNMsg := "不限制"
+		if config.AppConfig.SpeedTestTopN > 0 {
+			topNMsg = fmt.Sprintf("%d", config.AppConfig.SpeedTestTopN)
+		}
+		fmt.Printf("测速已启用: 结果文件=%s, TOP_N=%s, 单次超时=%v\n",
+			config.AppConfig.SpeedTestResultPath, topNMsg, config.AppConfig.SpeedTestTimeout)
+	} else {
+		fmt.Println("测速未启用 (设置 SPEEDTEST_ENABLED=true 开启)")
+	}
 
 	// 输出异步插件配置信息
 	if config.AppConfig.AsyncPluginEnabled {
