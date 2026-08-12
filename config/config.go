@@ -53,6 +53,12 @@ type Config struct {
 	AuthTokenExpiry time.Duration     // Token有效期
 	AuthJWTSecret   string            // JWT签名密钥
 
+	// 测速相关配置
+	SpeedTestEnabled    bool          // 是否启用插件/频道测速筛选
+	SpeedTestTopN       int           // 搜索时使用的延迟最低的插件/频道数量（0表示不限制，使用全部）
+	SpeedTestResultPath string        // 测速结果保存路径（文件）
+	SpeedTestTimeout    time.Duration // 单次测速的超时时间
+
 }
 
 // 全局配置实例
@@ -105,6 +111,12 @@ func Init() {
 		AuthUsers:       getAuthUsers(),
 		AuthTokenExpiry: getAuthTokenExpiry(),
 		AuthJWTSecret:   getAuthJWTSecret(),
+
+		// 测速相关配置
+		SpeedTestEnabled:    getSpeedTestEnabled(),
+		SpeedTestTopN:       getSpeedTestTopN(),
+		SpeedTestResultPath: getSpeedTestResultPath(),
+		SpeedTestTimeout:    getSpeedTestTimeout(),
 
 	}
 	
@@ -603,6 +615,57 @@ func getAuthJWTSecret() string {
 		secret = "pansou-default-secret-" + strconv.FormatInt(time.Now().Unix(), 10)
 	}
 	return secret
+}
+
+// 从环境变量获取测速功能开关，如果未设置则默认关闭（不改变现有行为）
+func getSpeedTestEnabled() bool {
+	enabled := os.Getenv("SPEEDTEST_ENABLED")
+	return enabled == "true" || enabled == "1"
+}
+
+// 从环境变量获取测速TOP N，即搜索时使用的延迟最低的插件/频道数量
+// 0或未设置表示不限制数量（测速结果仅用于排序，不做筛选）
+func getSpeedTestTopN() int {
+	topNEnv := os.Getenv("SPEEDTEST_TOP_N")
+	if topNEnv == "" {
+		return 0
+	}
+	topN, err := strconv.Atoi(topNEnv)
+	if err != nil || topN <= 0 {
+		return 0
+	}
+	return topN
+}
+
+// 从环境变量获取测速结果文件保存路径
+// 未设置时默认保存在二进制所在目录下的 speedtest_result.json
+func getSpeedTestResultPath() string {
+	path := os.Getenv("SPEEDTEST_RESULT_PATH")
+	if path != "" {
+		return path
+	}
+
+	// 获取二进制所在目录
+	exePath, err := os.Executable()
+	if err != nil {
+		// 获取失败时退回当前工作目录
+		return "speedtest_result.json"
+	}
+	exeDir := filepath.Dir(exePath)
+	return filepath.Join(exeDir, "speedtest_result.json")
+}
+
+// 从环境变量获取单次测速的超时时间（秒），如果未设置则使用默认值
+func getSpeedTestTimeout() time.Duration {
+	timeoutEnv := os.Getenv("SPEEDTEST_TIMEOUT")
+	if timeoutEnv == "" {
+		return 8 * time.Second // 默认8秒
+	}
+	timeout, err := strconv.Atoi(timeoutEnv)
+	if err != nil || timeout <= 0 {
+		return 8 * time.Second
+	}
+	return time.Duration(timeout) * time.Second
 }
 
 // 应用GC设置
