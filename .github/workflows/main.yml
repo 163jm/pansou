@@ -89,16 +89,14 @@ jobs:
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
           ls -lh "${ARCHIVE}"
 
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+      - name: 创建 Release 并上传附件
+        uses: softprops/action-gh-release@v2
         with:
-          name: pansou-${{ matrix.goos }}-${{ matrix.goarch }}
-          # 同时保留裸二进制和压缩包，方便 release job 统一收集
-          path: |
-            pansou-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
+          tag_name:               123
+          name:                   PanSou 123
+          draft:                  false
+          files: |
             pansou-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
-            pansou-windows-amd64.zip
-          if-no-files-found: warn
 
   # ──────────────────────────────────────────────
   # 创建 GitHub Release（仅 tag 触发时执行）
